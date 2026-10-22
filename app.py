@@ -309,15 +309,14 @@ def hero() -> None:
 <div class="hero fade-up">
   <span class="hero-badge">⚡ Weekly Automation</span>
   <div class="hero-title">CIF Compliance Report</div>
-  <div class="hero-sub">Tải lên file CifExport — hệ thống tự động lọc các CIF chưa hoàn tất,
-  đối chiếu với <b>SS26 Compliance list</b> và xuất báo cáo thẳng lên Google Sheets.</div>
+  <div class="hero-sub">The system automatically filters incomplete CIFs</div>
 </div>""")
 
 
 def stepper(phase: str) -> None:
     index = {"upload": 0, "ready": 0, "running": 1, "error": 1, "done": 2}[phase]
     done_upload = phase in ("ready", "running", "error", "done")
-    labels = ["Tải file lên", "Xử lý", "Hoàn tất"]
+    labels = ["Upload file", "Processing", "Finish"]
     parts = []
     for i, label in enumerate(labels):
         is_done = (i == 0 and done_upload) or i < index or (i == 2 and phase == "done")
@@ -488,8 +487,8 @@ def missing_secrets_screen() -> None:
 
 def upload_section(phase: str) -> bytes | None:
     with st.container(key="upload_card"):
-        render(st, '<div class="card-title">Tải file CifExport</div>'
-                   '<div class="card-sub">Định dạng .csv · hỗ trợ file lớn (~900k dòng).</div>')
+        render(st, '<div class="card-title">Upload CifExport file</div>'
+                   '<div class="card-sub">Format .csv · Process large file</div>')
         uploaded = st.file_uploader(
             "File CifExport (.csv)",
             type=["csv"],
