@@ -1,0 +1,13 @@
+# Bí mật — KHÔNG BAO GIỜ commit
+.streamlit/secrets.toml
+*.json
+
+# Dữ liệu
+*.csv
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
