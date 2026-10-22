@@ -1,0 +1,5 @@
+streamlit==1.66.1
+pandas>=2.2
+gspread==6.2.1
+google-auth>=2.30
+tzdata>=2024.1
