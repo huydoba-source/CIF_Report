@@ -28,7 +28,7 @@ import pandas as pd
 # ==========================================
 # CẤU HÌNH MẶC ĐỊNH
 # ==========================================
-DEFAULT_SPREADSHEET_ID = "13YODZ_HdDkXMAD3Z__HFSXGab64JiyNzpVtKkV8ZVBk"
+DEFAULT_SPREADSHEET_ID = "1jUQi_HsR3Tvd5iegmuEqK3MQCHwzpXXFygQj1NJi9Mg"
 LOOKUP_SHEET_NAME = "SS26 Compliance list"
 FILTER_COLUMN = "Cif completed for my zone"
 FILTER_VALUE = "no"
