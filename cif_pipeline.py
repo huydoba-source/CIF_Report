@@ -1,16 +1,16 @@
 """
 CIF Weekly Report pipeline.
 
-Logic giữ nguyên như upload_csv.py, nhưng được tách thành module độc lập với UI:
-  1. Kết nối Google Sheet
-  2. Tải 'SS26 Compliance list' -> lookup map (cột A -> Q, AD)
-  3. Quét CSV theo chunk, lọc 'Cif completed for my zone' == 'no', lấy CIF Code duy nhất
-  4. Đối chiếu với lookup map
-  5. Tạo sheet 'CIF Report - dd-Mon-YYYY' và ghi dữ liệu theo batch
-  6. Định dạng header
+Same logic as upload_csv.py, extracted into a UI-independent module:
+  1. Connect to the Google Sheet
+  2. Load 'SS26 Compliance list' -> lookup map (column A -> Q, AD)
+  3. Scan the CSV in chunks, keep 'Cif completed for my zone' == 'no', collect unique CIF Codes
+  4. Match against the lookup map
+  5. Create the 'CIF Report - dd-Mon-YYYY' sheet and write the data in batches
+  6. Format the header
 
-UI (Streamlit) giao tiếp với pipeline qua một `Reporter` gồm 3 callback:
-log / progress / stage — nhờ vậy module này không phụ thuộc Streamlit và có thể chạy CLI.
+The UI (Streamlit) talks to the pipeline through a `Reporter` with 3 callbacks:
+log / progress / stage — so this module does not depend on Streamlit and can run as a CLI.
 """
 
 from __future__ import annotations
@@ -26,14 +26,14 @@ import gspread
 import pandas as pd
 
 # ==========================================
-# CẤU HÌNH MẶC ĐỊNH
+# DEFAULT CONFIGURATION
 # ==========================================
-DEFAULT_SPREADSHEET_ID = "13YODZ_HdDkXMAD3Z__HFSXGab64JiyNzpVtKkV8ZVBk"
+DEFAULT_SPREADSHEET_ID = "1jUQi_HsR3Tvd5iegmuEqK3MQCHwzpXXFygQj1NJi9Mg"
 LOOKUP_SHEET_NAME = "SS26 Compliance list"
 FILTER_COLUMN = "Cif completed for my zone"
 FILTER_VALUE = "no"
-LOOKUP_COL_Q = 16   # cột Q (0-based)
-LOOKUP_COL_AD = 29  # cột AD (0-based)
+LOOKUP_COL_Q = 16   # column Q (0-based)
+LOOKUP_COL_AD = 29  # column AD (0-based)
 REPORT_HEADER = ["CIF Code", "Compliance Data (Q)", "Compliance Data (AD)"]
 NOT_FOUND = "Not found"
 
@@ -41,14 +41,14 @@ CSV_CHUNK_SIZE = 25_000
 SHEET_WRITE_BATCH = 10_000
 TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
-# Mỗi stage chiếm một khoảng % trên thanh tiến trình tổng
+# Each stage owns a slice (%) of the overall progress bar
 STAGES = [
-    ("connect", "Kết nối Google Sheets", 0, 5),
-    ("lookup", "Tải SS26 Compliance list", 5, 15),
-    ("scan", "Quét & lọc file CIF", 15, 70),
-    ("match", "Đối chiếu dữ liệu", 70, 75),
-    ("upload", "Ghi báo cáo lên Google Sheets", 75, 97),
-    ("format", "Định dạng báo cáo", 97, 100),
+    ("connect", "Connect to Google Sheets", 0, 5),
+    ("lookup", "Load SS26 Compliance list", 5, 15),
+    ("scan", "Scan & filter CIF file", 15, 70),
+    ("match", "Match records", 70, 75),
+    ("upload", "Write report to Google Sheets", 75, 97),
+    ("format", "Format report", 97, 100),
 ]
 STAGE_RANGE = {key: (start, end) for key, _, start, end in STAGES}
 
@@ -60,7 +60,7 @@ class Reporter(Protocol):
 
 
 class PipelineError(Exception):
-    """Lỗi có thông điệp thân thiện để hiển thị cho người dùng."""
+    """Error carrying a user-friendly message for display."""
 
 
 @dataclass
@@ -86,14 +86,14 @@ class PipelineResult:
 
 
 # ==========================================
-# KIỂM TRA FILE (chỉ đọc header, không parse toàn bộ file)
+# FILE INSPECTION (header only, no full parse)
 # ==========================================
 def inspect_csv(data: bytes) -> CsvInspection:
     header = pd.read_csv(io.BytesIO(data), nrows=0, encoding="utf-8-sig")
     columns = [str(c) for c in header.columns]
     if not columns:
-        raise PipelineError("File CSV không có dòng tiêu đề.")
-    # Đếm ký tự xuống dòng để ước tính số dòng — nhanh hơn nhiều so với parse CSV
+        raise PipelineError("The CSV file has no header row.")
+    # Count line breaks to estimate the row count — far faster than parsing the CSV
     estimated_rows = max(data.count(b"\n") - 1, 0)
     return CsvInspection(
         columns=columns,
@@ -105,7 +105,7 @@ def inspect_csv(data: bytes) -> CsvInspection:
 
 
 # ==========================================
-# PIPELINE CHÍNH
+# MAIN PIPELINE
 # ==========================================
 def _stage_progress(key: str, fraction: float) -> float:
     start, end = STAGE_RANGE[key]
@@ -141,48 +141,48 @@ def run_pipeline(
         reporter.progress(_stage_progress(key, 1))
 
     try:
-        # ---------- 1. Kết nối ----------
+        # ---------- 1. Connect ----------
         begin("connect")
-        reporter.log("Đang kết nối tới Google Sheet...")
+        reporter.log("Connecting to Google Sheet...")
         try:
             gc = gspread.service_account_from_dict(credentials)
             sh = gc.open_by_key(spreadsheet_id)
         except gspread.exceptions.SpreadsheetNotFound:
             raise PipelineError(
-                "Không tìm thấy Spreadsheet. Hãy kiểm tra ID và chia sẻ quyền Editor cho "
+                "Spreadsheet not found. Check the ID and share Editor access with the "
                 f"service account: {credentials.get('client_email', '')}"
             )
-        reporter.log(f"Đã kết nối: “{sh.title}”", "success")
+        reporter.log(f"Connected: “{sh.title}”", "success")
         finish("connect")
 
         # ---------- 2. Lookup map ----------
         begin("lookup")
-        reporter.log(f"Đang tải dữ liệu từ '{lookup_sheet_name}' để tạo từ điển (Lookup Map)...")
+        reporter.log(f"Loading '{lookup_sheet_name}' to build the Lookup Map...")
         try:
             fixed_data = sh.worksheet(lookup_sheet_name).get_all_values()
         except gspread.exceptions.WorksheetNotFound:
-            raise PipelineError(f"Không tìm thấy sheet '{lookup_sheet_name}' trong Spreadsheet.")
+            raise PipelineError(f"Sheet '{lookup_sheet_name}' was not found in the Spreadsheet.")
 
         lookup_map: dict[str, tuple[str, str]] = {}
-        for row in fixed_data[1:]:  # Bỏ qua dòng tiêu đề
+        for row in fixed_data[1:]:  # Skip the header row
             if row:
                 key = str(row[0]).strip()
                 if key:
                     val_q = row[LOOKUP_COL_Q] if len(row) > LOOKUP_COL_Q else ""
                     val_ad = row[LOOKUP_COL_AD] if len(row) > LOOKUP_COL_AD else ""
                     lookup_map[key] = (val_q, val_ad)
-        reporter.log(f"-> Lookup Map gồm {len(lookup_map):,} mã từ {len(fixed_data) - 1:,} dòng.", "success")
+        reporter.log(f"-> Lookup Map holds {len(lookup_map):,} codes from {len(fixed_data) - 1:,} rows.", "success")
         finish("lookup")
 
-        # ---------- 3. Quét CSV ----------
+        # ---------- 3. Scan CSV ----------
         begin("scan")
-        reporter.log(f"Đang đọc file CSV và lọc các CIF Code ({FILTER_COLUMN} = '{FILTER_VALUE}')...")
+        reporter.log(f"Reading the CSV file and filtering CIF Codes ({FILTER_COLUMN} = '{FILTER_VALUE}')...")
         inspection = inspect_csv(csv_bytes)
         if not inspection.has_filter_column:
-            raise PipelineError(f"File CSV không có cột bắt buộc '{FILTER_COLUMN}'.")
-        reporter.log(f"Cột khóa: '{inspection.id_column}' · Kích thước: {inspection.size_bytes / 1_048_576:,.1f} MB")
+            raise PipelineError(f"The CSV file is missing the required column '{FILTER_COLUMN}'.")
+        reporter.log(f"Key column: '{inspection.id_column}' · Size: {inspection.size_bytes / 1_048_576:,.1f} MB")
 
-        # Chỉ đọc đúng 2 cột cần thiết, giữ nguyên dạng chuỗi (tránh 374887 -> 374887.0)
+        # Read only the 2 required columns, kept as strings (avoids 374887 -> 374887.0)
         reader = pd.read_csv(
             io.BytesIO(csv_bytes),
             usecols=[inspection.id_column, FILTER_COLUMN],
@@ -191,7 +191,7 @@ def run_pipeline(
             encoding="utf-8-sig",
             chunksize=CSV_CHUNK_SIZE,
         )
-        # dict giữ thứ tự xuất hiện -> báo cáo ổn định giữa các lần chạy
+        # dict preserves first-seen order -> stable report between runs
         unique_ids: dict[str, None] = {}
         total_rows = filtered_rows = 0
         for idx, chunk in enumerate(reader, start=1):
@@ -204,17 +204,17 @@ def run_pipeline(
                     unique_ids[uid] = None
 
             fraction = total_rows / max(inspection.estimated_rows, 1)
-            reporter.progress(_stage_progress("scan", min(fraction, 0.99)), f"{total_rows:,} dòng")
+            reporter.progress(_stage_progress("scan", min(fraction, 0.99)), f"{total_rows:,} rows")
             reporter.log(
-                f"Chunk #{idx}: đã quét {total_rows:,} dòng · {filtered_rows:,} dòng 'no' · "
-                f"{len(unique_ids):,} mã duy nhất"
+                f"Chunk #{idx}: scanned {total_rows:,} rows · {filtered_rows:,} 'no' rows · "
+                f"{len(unique_ids):,} unique codes"
             )
-        reporter.log(f"-> Tìm thấy {len(unique_ids):,} CIF Code duy nhất cần báo cáo.", "success")
+        reporter.log(f"-> Found {len(unique_ids):,} unique CIF Codes to report.", "success")
         finish("scan")
 
-        # ---------- 4. Đối chiếu ----------
+        # ---------- 4. Match ----------
         begin("match")
-        reporter.log("Đang đối chiếu dữ liệu để tạo báo cáo...")
+        reporter.log("Matching records to build the report...")
         report_rows = [REPORT_HEADER]
         matched = 0
         for uid in unique_ids:
@@ -225,10 +225,10 @@ def run_pipeline(
             else:
                 report_rows.append([uid, NOT_FOUND, NOT_FOUND])
         not_found = len(unique_ids) - matched
-        reporter.log(f"-> Khớp {matched:,} mã · {not_found:,} mã không có trong Compliance list.", "success")
+        reporter.log(f"-> Matched {matched:,} codes · {not_found:,} codes not in the Compliance list.", "success")
         finish("match")
 
-        # ---------- 5. Ghi lên Google Sheets ----------
+        # ---------- 5. Write to Google Sheets ----------
         begin("upload")
         now = datetime.now(TIMEZONE)
         sheet_name = f"CIF Report - {now.strftime('%d-%b-%Y')}"
@@ -236,7 +236,7 @@ def run_pipeline(
             sheet_name += f" ({now.strftime('%H%M%S')})"
 
         n_cols = len(REPORT_HEADER)
-        reporter.log(f"Đang tạo Sheet mới '{sheet_name}' và đẩy {len(report_rows):,} dòng lên...")
+        reporter.log(f"Creating new sheet '{sheet_name}' and writing {len(report_rows):,} rows...")
         report_sheet = sh.add_worksheet(title=sheet_name, rows=len(report_rows) + 10, cols=5)
 
         total = len(report_rows)
@@ -250,13 +250,13 @@ def run_pipeline(
                 value_input_option="USER_ENTERED",
             )
             done_rows = start + len(batch)
-            reporter.progress(_stage_progress("upload", done_rows / total), f"{done_rows:,}/{total:,} dòng")
-            reporter.log(f"-> Đã ghi dòng {first_row:,} đến {done_rows:,}")
+            reporter.progress(_stage_progress("upload", done_rows / total), f"{done_rows:,}/{total:,} rows")
+            reporter.log(f"-> Wrote rows {first_row:,} to {done_rows:,}")
         finish("upload")
 
-        # ---------- 6. Định dạng ----------
+        # ---------- 6. Format ----------
         begin("format")
-        reporter.log("Đang định dạng Header...")
+        reporter.log("Formatting the header...")
         report_sheet.format(f"A1:{last_col}1", {
             "backgroundColor": {"red": 74 / 255, "green": 134 / 255, "blue": 232 / 255},
             "textFormat": {"foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}, "bold": True},
@@ -266,7 +266,7 @@ def run_pipeline(
         finish("format")
 
         elapsed = time.perf_counter() - started
-        reporter.log(f"✅ Báo cáo CIF Weekly Report đã được tạo thành công trong {elapsed:,.1f}s!", "success")
+        reporter.log(f"✅ CIF Weekly Report created successfully in {elapsed:,.1f}s!", "success")
         return PipelineResult(
             sheet_name=sheet_name,
             sheet_url=f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={report_sheet.id}",
@@ -285,16 +285,16 @@ def run_pipeline(
         raise
     except gspread.exceptions.APIError as exc:
         reporter.stage(current_stage, "error")
-        reporter.log(f"❌ Google API lỗi: {exc}", "error")
-        raise PipelineError(f"Google Sheets API trả về lỗi: {exc}") from exc
+        reporter.log(f"❌ Google API error: {exc}", "error")
+        raise PipelineError(f"Google Sheets API returned an error: {exc}") from exc
     except Exception as exc:
         reporter.stage(current_stage, "error")
-        reporter.log(f"❌ Lỗi không mong muốn: {exc!r}", "error")
+        reporter.log(f"❌ Unexpected error: {exc!r}", "error")
         raise
 
 
 # ==========================================
-# CHẠY TỪ DÒNG LỆNH (tương đương upload_csv.py cũ)
+# COMMAND-LINE ENTRY POINT (equivalent to the old upload_csv.py)
 # ==========================================
 class _PrintReporter:
     def log(self, message: str, level: str = "info") -> None:
@@ -312,7 +312,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 3:
-        print("Cách dùng: python cif_pipeline.py <file.csv> <service_account.json>")
+        print("Usage: python cif_pipeline.py <file.csv> <service_account.json>")
         sys.exit(1)
     with open(sys.argv[1], "rb") as f_csv, open(sys.argv[2], encoding="utf-8") as f_key:
         run_pipeline(f_csv.read(), json.load(f_key), _PrintReporter())
