@@ -1,7 +1,7 @@
-"""Chuyển file JSON service account thành nội dung secrets.toml.
+"""Convert a service account JSON key into secrets.toml content.
 
-Cách dùng:  python make_secrets.py vnlegalbot-xxxx.json > .streamlit/secrets.toml
-Sau đó copy nguyên nội dung vào Streamlit Cloud -> App settings -> Secrets.
+Usage:  python make_secrets.py vnlegalbot-xxxx.json > .streamlit/secrets.toml
+Then paste the full output into Streamlit Cloud -> App settings -> Secrets.
 """
 
 import json
