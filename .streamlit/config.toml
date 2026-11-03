@@ -1,5 +1,5 @@
 [server]
-# File CifExport ~900k dòng có thể vượt 200MB mặc định
+# A ~900k-row CifExport file can exceed the default 200MB limit
 maxUploadSize = 1024
 
 [browser]
