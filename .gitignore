@@ -1,8 +1,8 @@
-# Bí mật — KHÔNG BAO GIỜ commit
+# Secrets — NEVER commit
 .streamlit/secrets.toml
 *.json
 
-# Dữ liệu
+# Data
 *.csv
 *.xlsx
 
